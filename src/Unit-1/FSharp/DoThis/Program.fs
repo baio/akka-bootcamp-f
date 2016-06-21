@@ -27,7 +27,20 @@ let main argv =
     // make your first actors using the 'spawn' function
     // YOU NEED TO FILL IN HERE
     let consoleWriterActor = spawn myActorSystem "consoleWriterActor" (actorOf Actors.consoleWriterActor)  
-    let consoleReaderActor = spawn myActorSystem "consoleReaderActor" (actorOf2 (Actors.consoleReaderActor consoleWriterActor))
+    
+    //SupervisionStrategy used by tailCoordinatorActor
+    let strategy () = Strategy.OneForOne((fun ex ->
+        match ex with
+        | :? ArithmeticException  -> Directive.Resume
+        | :? NotSupportedException -> Directive.Stop
+        | _ -> Directive.Restart), 10, TimeSpan.FromSeconds(30.))
+
+    let tailCoordinatorActor = spawnOpt myActorSystem "tailCoordinatorActor" (actorOf2 Actors.tailCoordinatorActor) [ SpawnOption.SupervisorStrategy(strategy ()) ]
+    
+    // pass tailCoordinatorActor to fileValidatorActorProps (just adding one extra arg)
+    let fileValidatorActor = spawn myActorSystem "validationActor" (actorOf2 (Actors.fileValidatorActor consoleWriterActor))
+
+    let consoleReaderActor = spawn myActorSystem "consoleReaderActor" (actorOf2 (Actors.consoleReaderActor))
 
     // tell the consoleReader actor to begin
     // YOU NEED TO FILL IN HERE

@@ -4,6 +4,8 @@ open System
 open Akka.Actor
 open Akka.FSharp
 open Messages
+open System.IO
+//open FileUtility
 
 module Actors =
     
@@ -13,38 +15,66 @@ module Actors =
     | Message of string
     | Exit
 
+    let tailActor (filePath:string) (reporter:IActorRef) (mailbox:Actor<_>) =
+        //Monitor the file for changes
+        let observer = new FileObserver(mailbox.Self, Path.GetFullPath(filePath))
+        do observer.Start ()
+        //Read the initial contents of the file
+        let fileStream = new FileStream(Path.GetFullPath(filePath), FileMode.Open, FileAccess.Read, FileShare.ReadWrite)
+        let fileStreamReader = new StreamReader(fileStream, Text.Encoding.UTF8)
+        let text = fileStreamReader.ReadToEnd ()
+        do mailbox.Self <! InitialRead(filePath, text)
 
-    // in top of Actors.fs before consoleReaderActor
-    let (|EmptyMessage|MessageLengthIsEven|MessageLengthIsOdd|) (msg:string) =
-        match msg.Length, msg.Length % 2 with
-        | 0,_ -> EmptyMessage
-        | _,0 -> MessageLengthIsEven
-        | _,_ -> MessageLengthIsOdd
+        let rec loop() = actor {
+            let! message = mailbox.Receive()
+            match (box message) :?> FileCommand with
+            | FileWrite(_) ->
+                let text = fileStreamReader.ReadToEnd ()
+                if not <| String.IsNullOrEmpty text then reporter <! text else ()
+            | FileError(_,reason) -> reporter <! sprintf "Tail error: %s" reason
+            | InitialRead(_,text) -> reporter <! text
+            return! loop()
+        }
+        loop()
+
+    let tailCoordinatorActor (mailbox:Actor<_>) message =
+        match message with
+            | StartTail(filePath,reporter) -> spawn mailbox.Context "tailActor" (tailActor filePath reporter) |> ignore
+            | _ -> ()
 
     // in consoleReaderActor,
     let doPrintInstructions () =
-        Console.WriteLine "Write whatever you want into the console!"
-        Console.WriteLine "Some entries will pass validation, and some won't...\n\n"
-        Console.WriteLine "Type 'exit' to quit this application at any time.\n"
+        Console.WriteLine "Please provide the URI of a log file on disk.\n"
 
+    let fileValidatorActor (consoleWriter: IActorRef) (mailbox: Actor<_>) message =
+        let (|IsFileUri|_|) path = if File.Exists path then Some path else None
 
-    let consoleReaderActor (consoleWriter: IActorRef) (mailbox: Actor<_>) message = 
+        let (|EmptyMessage|Message|) (msg:string) =
+            match msg.Length with
+            | 0 -> EmptyMessage
+            | _ -> Message(msg)
+
+        match message with
+        | EmptyMessage ->
+            consoleWriter <! InputError("Input was blank. Please try again.\n", ErrorType.Empty)
+            mailbox.Sender () <! Continue
+        | IsFileUri _ ->
+            consoleWriter <! InputSuccess (sprintf "Starting processing for %s" message)
+            select "user/tailCoordinatorActor" mailbox.Context.System <! StartTail(message, consoleWriter)
+        | _ ->
+            consoleWriter <! InputError (sprintf "%s is not an existing URI on disk." message, ErrorType.Validation)
+            mailbox.Sender () <! Continue        
+
+    let consoleReaderActor (mailbox: Actor<_>) message = 
 
         // Reads input from console, validates it, then signals appropriate response
         // (continue processing, error, success, etc.).
+
         let getAndValidateInput () =
             let line = Console.ReadLine()
             match line.ToLower() with
             | "exit" -> mailbox.Context.System.Terminate() |> ignore
-            | input ->
-                match input with
-                | EmptyMessage ->
-                    consoleWriter <! InputError ("No input received.", ErrorType.Empty)
-                | MessageLengthIsEven ->
-                    consoleWriter <! InputSuccess ("Thank you! Message was valid.")                    
-                | _ ->
-                    consoleWriter <! InputError ("Invalid: input had odd number of characters.", ErrorType.Validation)
-                mailbox.Self  <! Continue
+            | _ ->  select "/user/validationActor" mailbox.Context.System <! line
 
         match box message with
           | :? Command as command ->
@@ -52,8 +82,9 @@ module Actors =
               | Start -> doPrintInstructions ()
               | _ -> ()
           | _ -> raise(Exception("Unexpected code"))
-           
+
         getAndValidateInput()
+           
 
     let consoleWriterActor message = 
       
@@ -67,4 +98,4 @@ module Actors =
             match inputResult with
             | InputError (reason,_) -> printInColor ConsoleColor.Red reason
             | InputSuccess reason -> printInColor ConsoleColor.Green reason
-        | _ -> raise(Exception("Unexpected code"))
+        | _ -> printInColor ConsoleColor.Yellow message
