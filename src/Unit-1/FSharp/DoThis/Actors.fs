@@ -3,6 +3,7 @@ namespace WinTail
 open System
 open Akka.Actor
 open Akka.FSharp
+open Messages
 
 module Actors =
     
@@ -12,33 +13,58 @@ module Actors =
     | Message of string
     | Exit
 
+
+    // in top of Actors.fs before consoleReaderActor
+    let (|EmptyMessage|MessageLengthIsEven|MessageLengthIsOdd|) (msg:string) =
+        match msg.Length, msg.Length % 2 with
+        | 0,_ -> EmptyMessage
+        | _,0 -> MessageLengthIsEven
+        | _,_ -> MessageLengthIsOdd
+
+    // in consoleReaderActor,
+    let doPrintInstructions () =
+        Console.WriteLine "Write whatever you want into the console!"
+        Console.WriteLine "Some entries will pass validation, and some won't...\n\n"
+        Console.WriteLine "Type 'exit' to quit this application at any time.\n"
+
+
     let consoleReaderActor (consoleWriter: IActorRef) (mailbox: Actor<_>) message = 
-        let line = Console.ReadLine ()
-        match line.ToLower() with
-        | "exit" -> mailbox.Context.System.Terminate() |> ignore
-        | input -> 
-            // send input to the console writer to process and print
-            // YOU NEED TO FILL IN HERE
-            consoleWriter <! Message input
 
-            // continue reading messages from the console
-            // YOU NEED TO FILL IN HERE
-            mailbox.Self <! Continue
+        // Reads input from console, validates it, then signals appropriate response
+        // (continue processing, error, success, etc.).
+        let getAndValidateInput () =
+            let line = Console.ReadLine()
+            match line.ToLower() with
+            | "exit" -> mailbox.Context.System.Terminate() |> ignore
+            | input ->
+                match input with
+                | EmptyMessage ->
+                    consoleWriter <! InputError ("No input received.", ErrorType.Empty)
+                | MessageLengthIsEven ->
+                    consoleWriter <! InputSuccess ("Thank you! Message was valid.")                    
+                | _ ->
+                    consoleWriter <! InputError ("Invalid: input had odd number of characters.", ErrorType.Validation)
+                mailbox.Self  <! Continue
 
-    let consoleWriterActor (message : Command) = 
-        let (|Even|Odd|) n = if n % 2 = 0 then Even else Odd
-    
+        match box message with
+          | :? Command as command ->
+              match command with
+              | Start -> doPrintInstructions ()
+              | _ -> ()
+          | _ -> raise(Exception("Unexpected code"))
+           
+        getAndValidateInput()
+
+    let consoleWriterActor message = 
+      
         let printInColor color message =
             Console.ForegroundColor <- color
             Console.WriteLine (message.ToString ())
             Console.ResetColor ()
         
-        match message with
-        | Message input ->
-            match input.Length with 
-                | 0    -> printInColor ConsoleColor.DarkYellow "Please provide an input.\n"
-                | Even -> printInColor ConsoleColor.Red "Your string had an even # of characters.\n"
-                | Odd  -> printInColor ConsoleColor.Green "Your string had an odd # of characters.\n"
-        | _ ->
-            raise (System.Exception("Unexpected code"))            
-        
+        match box message with
+        | :? InputResult as inputResult ->
+            match inputResult with
+            | InputError (reason,_) -> printInColor ConsoleColor.Red reason
+            | InputSuccess reason -> printInColor ConsoleColor.Green reason
+        | _ -> raise(Exception("Unexpected code"))

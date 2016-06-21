@@ -23,9 +23,7 @@ let main argv =
     // initialize an actor system
     // YOU NEED TO FILL IN HERE
     let myActorSystem = System.create "MyActorSystem" (Configuration.load ())
-    
-    printInstructions ()
-    
+           
     // make your first actors using the 'spawn' function
     // YOU NEED TO FILL IN HERE
     let consoleWriterActor = spawn myActorSystem "consoleWriterActor" (actorOf Actors.consoleWriterActor)  
@@ -36,9 +34,8 @@ let main argv =
     consoleReaderActor <! Actors.Start
 
     
-    let task = myActorSystem.WhenTerminated 
-    task.Wait()
-
+    myActorSystem.WhenTerminated.Wait()
+        
     0
     
 

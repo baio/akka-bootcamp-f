@@ -54,10 +54,12 @@
   </Choose>
   <Import Project="$(FSharpTargetsPath)" />
   <ItemGroup>
+    <Compile Include="Messages.fs" />
     <Compile Include="Actors.fs" />
     <Compile Include="Program.fs" />
     <None Include="App.config" />
     <Content Include="packages.config" />
+    <None Include="Messages.fsx" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="Akka">
