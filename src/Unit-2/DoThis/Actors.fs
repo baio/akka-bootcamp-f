@@ -24,6 +24,7 @@ module Messages =
     | AddSeries of series: Series
     | RemoveSeries of seriesName: string
     | Metric of series: string * counterValue: float
+    | TogglePause 
 
     type CounterMessage =
     | GatherMetrics
@@ -42,7 +43,7 @@ module Messages =
 module Actors = 
 
        
-    let chartingActor (chart: Chart) (mailbox:Actor<_>) =
+    let chartingActor (chart: Chart)  (pauseButton:System.Windows.Forms.Button) (mailbox:Actor<_>) =
         
         let maxPoints = 250
 
@@ -57,7 +58,10 @@ module Actors =
                 else
                         ()
 
-        let rec charting(mapping:Map<string,Series>, noOfPts:int) = actor {
+        let setPauseButtonText paused = pauseButton.Text <- if not paused then "PAUSE ||" else "RESUME ->"
+
+        let rec charting(mapping:Map<string,Series>, noOfPts:int) = 
+            actor {
                 let! message = mailbox.Receive ()
                 match message with                  
                 | InitializeChart series ->
@@ -85,8 +89,30 @@ module Actors =
                         while (series.Points.Count > maxPoints) do series.Points.RemoveAt 0
                         setChartBoundaries (mapping, newNoOfPts)
                         return! charting (mapping, newNoOfPts)
+                | TogglePause -> 
+                    setPauseButtonText true
+                    return! paused (mapping, noOfPts)
                 | m -> mailbox.Unhandled(m)
-        }
+            }                
+        and paused (mapping:Map<string,Series>, noOfPts:int) =
+            actor {
+                let! message = mailbox.Receive ()
+                match message with
+                | TogglePause ->
+                    setPauseButtonText false
+                    return! charting (mapping, noOfPts)
+                | Metric(seriesName, counterValue) when not <| String.IsNullOrEmpty seriesName && mapping |> Map.containsKey seriesName ->
+                    let newNoOfPts = noOfPts + 1
+                    let series = mapping.[seriesName]
+                    series.Points.AddXY (newNoOfPts, 0.) |> ignore
+                    while (series.Points.Count > maxPoints) do series.Points.RemoveAt 0
+                    setChartBoundaries (mapping, newNoOfPts)
+                    return! paused (mapping, newNoOfPts)
+                | _ -> ()
+                setChartBoundaries (mapping, noOfPts)
+                return! paused (mapping, noOfPts)
+            }
+
         charting (Map.empty<string, Series>, 0)
     
     let performanceCounterActor (seriesName:string)  (performanceCounterGenerator:unit -> PerformanceCounter) (mailbox:Actor<_>) =
@@ -104,7 +130,7 @@ module Actors =
 
         let rec loop(subscriptions) = actor {
             let! message = mailbox.Receive ()
-            match box message :?> CounterMessage with
+            match message with
             | GatherMetrics ->
                 let msg = Metric(seriesName, float <| counter.NextValue ())
                 subscriptions |> Seq.iter (fun subscriber -> subscriber <! msg)
